@@ -12,12 +12,19 @@ import {
   serverTimestamp,
   where,
 } from 'firebase/firestore';
-import type { Emergency, AppUser } from '@/types';
+import type {
+  Emergency,
+  ServiceType,
+  EmergencyStatusTimestamps,
+} from '@/types';
 import Script from 'next/script';
 
-// Extendemos Emergency localmente para incluir prioridad
+// ---- Tipos locales ----
+
+type Priority = 'baja' | 'media' | 'alta';
+
 type AdminEmergency = Emergency & {
-  priority?: 'baja' | 'media' | 'alta';
+  priority?: Priority;
 };
 
 type AmbulanciaOption = {
@@ -25,6 +32,23 @@ type AmbulanciaOption = {
   displayName: string;
   email: string | null;
 };
+
+// ---- Helpers ----
+
+const normalizeTimestamp = (value: any): number | undefined => {
+  if (!value) return undefined;
+  if (typeof value === 'number') return value;
+  if (value?.toMillis) return value.toMillis();
+  return undefined;
+};
+
+function formatTime(ms?: number) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleTimeString('es-MX', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 // ---- Componente para elegir ubicación con buscador + mapa ----
 
@@ -141,15 +165,36 @@ function LocationPicker({
   );
 }
 
+// ---- Generar folio automático ----
+
+function generateFolio() {
+  const now = Date.now();
+  // Ejemplo: SRV-123456 (últimos 6 dígitos del timestamp)
+  return 'SRV-' + now.toString().slice(-6);
+}
+
 // ---- Página de Admin ----
 
 export default function AdminPage() {
   const { user, loading } = useAuth();
+
+  // Ubicación
   const [direccion, setDireccion] = useState('');
-  const [ambulanciaId, setAmbulanciaId] = useState('');
-  const [priority, setPriority] = useState<'baja' | 'media' | 'alta'>('media');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
+
+  // Asignación
+  const [ambulanciaId, setAmbulanciaId] = useState('');
+  const [priority, setPriority] = useState<Priority>('media');
+
+  // Datos del servicio
+  const [tipoServicio, setTipoServicio] = useState<ServiceType>('emergencia');
+  const [descripcion, setDescripcion] = useState('');
+
+  // Información general del paciente/cliente
+  const [pacienteNombre, setPacienteNombre] = useState('');
+  const [pacienteEdad, setPacienteEdad] = useState('');
+  const [pacienteTelefono, setPacienteTelefono] = useState('');
 
   const [emergencias, setEmergencias] = useState<AdminEmergency[]>([]);
   const [ambulancias, setAmbulancias] = useState<AmbulanciaOption[]>([]);
@@ -169,6 +214,21 @@ export default function AdminPage() {
       const list: AdminEmergency[] = [];
       snap.forEach(docSnap => {
         const data = docSnap.data() as any;
+
+        const createdAtMs =
+          typeof data.createdAt === 'number'
+            ? data.createdAt
+            : data.createdAt?.toMillis?.() ?? Date.now();
+
+        const statusRaw = data.statusTimestamps ?? {};
+        const statusTimestamps: EmergencyStatusTimestamps = {
+          pendiente:
+            normalizeTimestamp(statusRaw.pendiente) ?? createdAtMs,
+          en_camino: normalizeTimestamp(statusRaw.en_camino),
+          en_sitio: normalizeTimestamp(statusRaw.en_sitio),
+          finalizada: normalizeTimestamp(statusRaw.finalizada),
+        };
+
         list.push({
           id: docSnap.id,
           ambulanciaId: data.ambulanciaId,
@@ -176,9 +236,15 @@ export default function AdminPage() {
           lat: data.lat,
           lng: data.lng,
           estado: data.estado,
-          createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
-          priority: data.priority ?? 'media',
-        });
+          createdAt: createdAtMs,
+          priority: (data.priority ?? 'media') as Priority,
+
+          folio: data.folio,
+          tipoServicio: data.tipoServicio,
+          descripcion: data.descripcion,
+          paciente: data.paciente,
+          statusTimestamps,
+        } as AdminEmergency);
       });
       setEmergencias(list);
     });
@@ -207,13 +273,28 @@ export default function AdminPage() {
 
   const handleCreateEmergency = async (e: FormEvent) => {
     e.preventDefault();
+
     if (!direccion || !ambulanciaId || lat == null || lng == null) {
       alert('Falta dirección, ambulancia o ubicación en el mapa.');
       return;
     }
 
+    if (!descripcion || !tipoServicio || !pacienteNombre) {
+      alert(
+        'Falta descripción del servicio o nombre del paciente/cliente.'
+      );
+      return;
+    }
+
+    const edadNumber =
+      pacienteEdad.trim() !== '' ? Number(pacienteEdad.trim()) : undefined;
+
     try {
       setCreating(true);
+
+      const folio = generateFolio();
+      const ahora = Date.now();
+
       await addDoc(collection(db, 'emergencias'), {
         ambulanciaId,
         direccion,
@@ -221,14 +302,32 @@ export default function AdminPage() {
         lng,
         estado: 'pendiente',
         priority,
-        createdAt: serverTimestamp(),
+        createdAt: serverTimestamp(), // lo normalizamos al leer
+
+        folio,
+        tipoServicio,
+        descripcion,
+        paciente: {
+          nombre: pacienteNombre,
+          ...(edadNumber && !isNaN(edadNumber) ? { edad: edadNumber } : {}),
+          telefono: pacienteTelefono || undefined,
+        },
+
+        statusTimestamps: {
+          pendiente: ahora, // número, compatible con tu type
+        } as EmergencyStatusTimestamps,
       });
 
-      // Limpiar solo dirección y coords (mantener selección de ambulancia si quieres)
+      // Limpiar formulario
       setDireccion('');
       setLat(null);
       setLng(null);
       setPriority('media');
+      setTipoServicio('emergencia');
+      setDescripcion('');
+      setPacienteNombre('');
+      setPacienteEdad('');
+      setPacienteTelefono('');
     } finally {
       setCreating(false);
     }
@@ -249,9 +348,9 @@ export default function AdminPage() {
         </button>
       </header>
 
-      {/* Crear emergencia */}
+      {/* Crear emergencia / servicio */}
       <section className="bg-white rounded-xl p-4 shadow space-y-4">
-        <h2 className="font-semibold text-lg">Crear emergencia</h2>
+        <h2 className="font-semibold text-lg">Crear emergencia / servicio</h2>
 
         <form onSubmit={handleCreateEmergency} className="space-y-4">
           {/* Picker de ubicación */}
@@ -265,6 +364,86 @@ export default function AdminPage() {
               setLng(newLng);
             }}
           />
+
+          {/* Tipo de servicio */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Tipo de servicio
+              </label>
+              <select
+                className="border rounded px-3 py-2 w-full"
+                value={tipoServicio}
+                onChange={e =>
+                  setTipoServicio(e.target.value as ServiceType)
+                }
+              >
+                <option value="evento">Evento</option>
+                <option value="traslado">Traslado</option>
+                <option value="emergencia">Emergencia</option>
+                <option value="membresia">Membresía</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Descripción del servicio */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Descripción del servicio / reporte
+            </label>
+            <textarea
+              className="border rounded px-3 py-2 w-full min-h-[90px]"
+              placeholder="Descripción del motivo de la llamada, hallazgos, etc."
+              value={descripcion}
+              onChange={e => setDescripcion(e.target.value)}
+            />
+          </div>
+
+          {/* Información general del paciente / cliente */}
+          <div className="border rounded-lg p-3 space-y-3 bg-slate-50">
+            <p className="text-sm font-semibold text-slate-700">
+              Información general del paciente / cliente
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Nombre
+                </label>
+                <input
+                  type="text"
+                  className="border rounded px-3 py-2 w-full"
+                  value={pacienteNombre}
+                  onChange={e => setPacienteNombre(e.target.value)}
+                  placeholder="Nombre completo"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Edad
+                </label>
+                <input
+                  type="number"
+                  className="border rounded px-3 py-2 w-full"
+                  value={pacienteEdad}
+                  onChange={e => setPacienteEdad(e.target.value)}
+                  placeholder="Años"
+                  min={0}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Teléfono
+                </label>
+                <input
+                  type="tel"
+                  className="border rounded px-3 py-2 w-full"
+                  value={pacienteTelefono}
+                  onChange={e => setPacienteTelefono(e.target.value)}
+                  placeholder="Teléfono de contacto"
+                />
+              </div>
+            </div>
+          </div>
 
           {/* Selección de ambulancia + prioridad + botón */}
           <div className="flex flex-col md:flex-row gap-2 md:items-end">
@@ -294,7 +473,7 @@ export default function AdminPage() {
                 className="border rounded px-3 py-2"
                 value={priority}
                 onChange={e =>
-                  setPriority(e.target.value as 'baja' | 'media' | 'alta')
+                  setPriority(e.target.value as Priority)
                 }
               >
                 <option value="baja">Baja</option>
@@ -324,7 +503,17 @@ export default function AdminPage() {
               className="border rounded-lg px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between"
             >
               <div>
+                {e.folio && (
+                  <p className="text-xs font-semibold text-slate-500">
+                    Folio: {e.folio}
+                  </p>
+                )}
                 <p className="font-semibold">{e.direccion}</p>
+                {e.tipoServicio && (
+                  <p className="text-xs uppercase text-slate-500">
+                    Tipo: {e.tipoServicio}
+                  </p>
+                )}
                 <p className="text-sm text-slate-600">
                   Ambulancia: {e.ambulanciaId}
                 </p>
@@ -342,7 +531,47 @@ export default function AdminPage() {
                     {e.priority ?? 'media'}
                   </span>
                 </p>
+
+                {e.paciente && (
+                  <div className="mt-1 text-xs text-slate-600 space-y-0.5">
+                    <p className="font-semibold text-[11px] text-slate-500">
+                      Paciente / cliente
+                    </p>
+                    {e.paciente.nombre && <p>Nombre: {e.paciente.nombre}</p>}
+                    {typeof e.paciente.edad !== 'undefined' && (
+                      <p>Edad: {e.paciente.edad} años</p>
+                    )}
+                    {e.paciente.telefono && (
+                      <p>Teléfono: {e.paciente.telefono}</p>
+                    )}
+                  </div>
+                )}
+
+                {e.statusTimestamps && (
+                  <div className="mt-1 text-[11px] text-slate-600 space-y-0.5">
+                    <p className="font-semibold text-slate-700">
+                      Tiempos de atención
+                    </p>
+                    <p>
+                      Pendiente:{' '}
+                      {formatTime(e.statusTimestamps.pendiente)}
+                    </p>
+                    <p>
+                      En camino:{' '}
+                      {formatTime(e.statusTimestamps.en_camino)}
+                    </p>
+                    <p>
+                      En sitio:{' '}
+                      {formatTime(e.statusTimestamps.en_sitio)}
+                    </p>
+                    <p>
+                      Finalizada:{' '}
+                      {formatTime(e.statusTimestamps.finalizada)}
+                    </p>
+                  </div>
+                )}
               </div>
+
               <p className="text-sm font-semibold uppercase mt-1 md:mt-0">
                 {e.estado}
               </p>

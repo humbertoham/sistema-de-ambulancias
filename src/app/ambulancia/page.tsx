@@ -11,7 +11,11 @@ import {
   updateDoc,
   doc,
 } from 'firebase/firestore';
-import type { Emergency, EmergencyStatus } from '@/types';
+import type {
+  Emergency,
+  EmergencyStatus,
+  EmergencyStatusTimestamps,
+} from '@/types';
 import Script from 'next/script';
 
 type Priority = 'baja' | 'media' | 'alta';
@@ -24,6 +28,22 @@ type LatLng = {
   lat: number;
   lng: number;
 };
+
+// Helpers
+const normalizeTimestamp = (value: any): number | undefined => {
+  if (!value) return undefined;
+  if (typeof value === 'number') return value;
+  if (value?.toMillis) return value.toMillis();
+  return undefined;
+};
+
+function formatTime(ms?: number) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleTimeString('es-MX', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 export default function AmbulanciaPage() {
   const { user, loading } = useAuth();
@@ -67,6 +87,21 @@ export default function AmbulanciaPage() {
         // Ignoramos finalizadas para la vista principal
         if (data.estado === 'finalizada') return;
 
+        const createdAtMs =
+          typeof data.createdAt === 'number'
+            ? data.createdAt
+            : data.createdAt?.toMillis?.() ?? Date.now();
+
+        const statusRaw = data.statusTimestamps ?? {};
+        // 👇 siempre construimos un EmergencyStatusTimestamps
+        const statusTimestamps: EmergencyStatusTimestamps = {
+          pendiente:
+            normalizeTimestamp(statusRaw.pendiente) ?? createdAtMs,
+          en_camino: normalizeTimestamp(statusRaw.en_camino),
+          en_sitio: normalizeTimestamp(statusRaw.en_sitio),
+          finalizada: normalizeTimestamp(statusRaw.finalizada),
+        };
+
         list.push({
           id: docSnap.id,
           ambulanciaId: data.ambulanciaId,
@@ -74,8 +109,15 @@ export default function AmbulanciaPage() {
           lat: data.lat,
           lng: data.lng,
           estado: data.estado,
-          createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+          createdAt: createdAtMs,
           priority: (data.priority ?? 'media') as Priority,
+
+          // Campos que definiste en Emergency (folio, tipoServicio, descripcion, paciente, statusTimestamps)
+          folio: data.folio,
+          tipoServicio: data.tipoServicio,
+          descripcion: data.descripcion,
+          paciente: data.paciente,
+          statusTimestamps,
         });
       });
 
@@ -101,7 +143,7 @@ export default function AmbulanciaPage() {
   const selectedEmergencia =
     emergencias.find(e => e.id === selectedId) ?? emergencias[0] ?? null;
 
-  // Geolocalización de la ambulancia (gratis, hardware del dispositivo)
+  // Geolocalización de la ambulancia
   useEffect(() => {
     if (!navigator.geolocation) {
       console.warn('Geolocation no disponible en este navegador.');
@@ -119,7 +161,7 @@ export default function AmbulanciaPage() {
         console.warn('Error en geolocalización:', err);
       },
       {
-        enableHighAccuracy: false, // menos consumo de batería / GPS
+        enableHighAccuracy: false,
         maximumAge: 10000,
         timeout: 10000,
       }
@@ -188,9 +230,16 @@ export default function AmbulanciaPage() {
     );
   }, [mapsLoaded, selectedEmergencia, currentPosition]);
 
+  // Guarda estado + hora numérica en statusTimestamps
   const cambiarEstado = async (estado: EmergencyStatus) => {
     if (!selectedEmergencia) return;
-    await updateDoc(doc(db, 'emergencias', selectedEmergencia.id), { estado });
+
+    const ahora = Date.now(); // número
+
+    await updateDoc(doc(db, 'emergencias', selectedEmergencia.id), {
+      estado,
+      [`statusTimestamps.${estado}`]: ahora,
+    });
   };
 
   const finalizarEmergencia = async () => {
@@ -237,16 +286,29 @@ export default function AmbulanciaPage() {
           ) : (
             <>
               <div>
-                <p className="font-semibold text-lg">Emergencia asignada</p>
-                <p className="text-sm text-slate-700">
+                {selectedEmergencia.folio && (
+                  <p className="text-xs font-semibold text-slate-500">
+                    Folio: {selectedEmergencia.folio}
+                  </p>
+                )}
+
+                <p className="font-semibold text-lg">
                   {selectedEmergencia.direccion}
                 </p>
+
+                {selectedEmergencia.tipoServicio && (
+                  <p className="text-xs uppercase text-slate-500 mt-1">
+                    Tipo de servicio: {selectedEmergencia.tipoServicio}
+                  </p>
+                )}
+
                 <p className="text-sm text-slate-500 mt-1">
                   Estado:{' '}
                   <span className="font-semibold">
                     {selectedEmergencia.estado}
                   </span>
                 </p>
+
                 {selectedEmergencia.priority && (
                   <p className="text-xs mt-1">
                     Prioridad:{' '}
@@ -262,6 +324,63 @@ export default function AmbulanciaPage() {
                       {selectedEmergencia.priority.toUpperCase()}
                     </span>
                   </p>
+                )}
+
+                {selectedEmergencia.descripcion && (
+                  <p className="text-sm text-slate-700 mt-2">
+                    <span className="font-semibold">Descripción: </span>
+                    {selectedEmergencia.descripcion}
+                  </p>
+                )}
+
+                {selectedEmergencia.paciente && (
+                  <div className="mt-3 text-sm text-slate-700">
+                    <p className="font-semibold text-xs text-slate-500">
+                      Paciente / cliente
+                    </p>
+                    {selectedEmergencia.paciente.nombre && (
+                      <p>Nombre: {selectedEmergencia.paciente.nombre}</p>
+                    )}
+                    {typeof selectedEmergencia.paciente.edad !==
+                      'undefined' && (
+                      <p>Edad: {selectedEmergencia.paciente.edad} años</p>
+                    )}
+                    {selectedEmergencia.paciente.telefono && (
+                      <p>Teléfono: {selectedEmergencia.paciente.telefono}</p>
+                    )}
+                  </div>
+                )}
+
+                {selectedEmergencia.statusTimestamps && (
+                  <div className="mt-3 text-xs text-slate-600 space-y-1">
+                    <p className="font-semibold text-slate-700">
+                      Tiempos de atención
+                    </p>
+                    <p>
+                      Pendiente:{' '}
+                      {formatTime(
+                        selectedEmergencia.statusTimestamps.pendiente
+                      )}
+                    </p>
+                    <p>
+                      En camino:{' '}
+                      {formatTime(
+                        selectedEmergencia.statusTimestamps.en_camino
+                      )}
+                    </p>
+                    <p>
+                      En sitio:{' '}
+                      {formatTime(
+                        selectedEmergencia.statusTimestamps.en_sitio
+                      )}
+                    </p>
+                    <p>
+                      Finalizada:{' '}
+                      {formatTime(
+                        selectedEmergencia.statusTimestamps.finalizada
+                      )}
+                    </p>
+                  </div>
                 )}
               </div>
 
@@ -332,7 +451,17 @@ export default function AmbulanciaPage() {
                       : 'border-slate-200 hover:bg-slate-50'
                   }`}
                 >
+                  {e.folio && (
+                    <p className="text-[11px] text-slate-500">
+                      Folio: {e.folio}
+                    </p>
+                  )}
                   <p className="font-semibold truncate">{e.direccion}</p>
+                  {e.tipoServicio && (
+                    <p className="text-[11px] uppercase text-slate-500">
+                      {e.tipoServicio}
+                    </p>
+                  )}
                   <p className="text-xs text-slate-500">
                     Estado: <span className="font-semibold">{e.estado}</span>
                   </p>
