@@ -42,19 +42,22 @@ export interface EmergencyStatusTimestamps {
 
 // Emergencia / Servicio
 export interface Emergency {
-  id: string;                // ID del documento en Firestore
-  folio: string;             // folio autogenerado
-  tipoServicio: ServiceType; // Evento, traslado, etc.
-  descripcion: string;       // descripción del servicio
-  paciente: PatientInfo;     // información del paciente/cliente
+  id: string;
+  folio: string;
+  tipoServicio: ServiceType;
+  descripcion: string;
+  paciente: PatientInfo;
 
   direccion: string;
   lat: number;
   lng: number;
 
-  ambulanciaId: string;      // UID de la ambulancia asignada
+  ambulanciaId: string;
   estado: EmergencyStatus;
 
-  createdAt: number;         // timestamp de creación
-  statusTimestamps: EmergencyStatusTimestamps; // horas por estado
+  createdAt: number;
+  statusTimestamps: EmergencyStatusTimestamps;
+
+  // 👇 nuevo
+  ambulanciaDescripcion?: string;  // texto que llenará la ambulancia
 }

@@ -1,5 +1,5 @@
 'use client';
-
+import Link from 'next/link';
 import { useAuth, logout } from '@/lib/auth';
 import { useEffect, useState, FormEvent, useRef } from 'react';
 import { db } from '@/lib/firebase';
@@ -47,6 +47,15 @@ function formatTime(ms?: number) {
   return new Date(ms).toLocaleTimeString('es-MX', {
     hour: '2-digit',
     minute: '2-digit',
+  });
+}
+
+function formatDate(ms?: number) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleDateString('es-MX', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
   });
 }
 
@@ -208,49 +217,56 @@ export default function AdminPage() {
   }, [user, loading]);
 
   // Cargar emergencias
-  useEffect(() => {
-    const q = query(collection(db, 'emergencias'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, snap => {
-      const list: AdminEmergency[] = [];
-      snap.forEach(docSnap => {
-        const data = docSnap.data() as any;
+ // Cargar emergencias (solo activas)
+useEffect(() => {
+  const q = query(collection(db, 'emergencias'), orderBy('createdAt', 'desc'));
+  const unsub = onSnapshot(q, snap => {
+    const list: AdminEmergency[] = [];
+    snap.forEach(docSnap => {
+      const data = docSnap.data() as any;
 
-        const createdAtMs =
-          typeof data.createdAt === 'number'
-            ? data.createdAt
-            : data.createdAt?.toMillis?.() ?? Date.now();
+      const createdAtMs =
+        typeof data.createdAt === 'number'
+          ? data.createdAt
+          : data.createdAt?.toMillis?.() ?? Date.now();
 
-        const statusRaw = data.statusTimestamps ?? {};
-        const statusTimestamps: EmergencyStatusTimestamps = {
-          pendiente:
-            normalizeTimestamp(statusRaw.pendiente) ?? createdAtMs,
-          en_camino: normalizeTimestamp(statusRaw.en_camino),
-          en_sitio: normalizeTimestamp(statusRaw.en_sitio),
-          finalizada: normalizeTimestamp(statusRaw.finalizada),
-        };
+      const statusRaw = data.statusTimestamps ?? {};
+      const statusTimestamps: EmergencyStatusTimestamps = {
+        pendiente:
+          normalizeTimestamp(statusRaw.pendiente) ?? createdAtMs,
+        en_camino: normalizeTimestamp(statusRaw.en_camino),
+        en_sitio: normalizeTimestamp(statusRaw.en_sitio),
+        finalizada: normalizeTimestamp(statusRaw.finalizada),
+      };
 
-        list.push({
-          id: docSnap.id,
-          ambulanciaId: data.ambulanciaId,
-          direccion: data.direccion,
-          lat: data.lat,
-          lng: data.lng,
-          estado: data.estado,
-          createdAt: createdAtMs,
-          priority: (data.priority ?? 'media') as Priority,
+      list.push({
+  id: docSnap.id,
+  ambulanciaId: data.ambulanciaId,
+  direccion: data.direccion,
+  lat: data.lat,
+  lng: data.lng,
+  estado: data.estado,
+  createdAt: createdAtMs,
+  priority: (data.priority ?? 'media') as Priority,
 
-          folio: data.folio,
-          tipoServicio: data.tipoServicio,
-          descripcion: data.descripcion,
-          paciente: data.paciente,
-          statusTimestamps,
-        } as AdminEmergency);
-      });
-      setEmergencias(list);
+  folio: data.folio,
+  tipoServicio: data.tipoServicio,
+  descripcion: data.descripcion,
+  paciente: data.paciente,
+  statusTimestamps,
+
+  ambulanciaDescripcion: data.ambulanciaDescripcion, // 👈 nuevo
+} as AdminEmergency);
     });
 
-    return () => unsub();
-  }, []);
+    // 👇 aquí filtramos solo las emergencias activas
+    const activas = list.filter(e => e.estado !== 'finalizada');
+    setEmergencias(activas);
+  });
+
+  return () => unsub();
+}, []);
+
 
   // Cargar ambulancias (usuarios con role = 'ambulancia')
   useEffect(() => {
@@ -339,6 +355,12 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen p-4 space-y-4 bg-slate-100">
       <header className="flex justify-between items-center mb-2">
+        <Link
+  href="/historial"
+  className="px-3 py-1 rounded bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 transition"
+>
+  Historial
+</Link>
         <h1 className="text-2xl font-bold">Panel administrador</h1>
         <button
           onClick={logout}
@@ -508,15 +530,23 @@ export default function AdminPage() {
                     Folio: {e.folio}
                   </p>
                 )}
+                
+<p className="text-xs text-slate-500">
+  Fecha: {formatDate(e.createdAt)}
+</p>
                 <p className="font-semibold">{e.direccion}</p>
                 {e.tipoServicio && (
                   <p className="text-xs uppercase text-slate-500">
                     Tipo: {e.tipoServicio}
                   </p>
                 )}
-                <p className="text-sm text-slate-600">
-                  Ambulancia: {e.ambulanciaId}
-                </p>
+               <p className="text-sm text-slate-600">
+  Ambulancia:{' '}
+  {
+    ambulancias.find(a => a.id === e.ambulanciaId)?.displayName
+    ?? e.ambulanciaId
+  }
+</p>
                 <p className="text-xs text-slate-500">
                   Prioridad:{' '}
                   <span
@@ -541,11 +571,17 @@ export default function AdminPage() {
                     {typeof e.paciente.edad !== 'undefined' && (
                       <p>Edad: {e.paciente.edad} años</p>
                     )}
+                    
                     {e.paciente.telefono && (
                       <p>Teléfono: {e.paciente.telefono}</p>
                     )}
                   </div>
                 )}
+                {e.ambulanciaDescripcion && (
+  <p className="mt-1 text-xs text-slate-600">
+    Nota de ambulancia: {e.ambulanciaDescripcion}
+  </p>
+)}
 
                 {e.statusTimestamps && (
                   <div className="mt-1 text-[11px] text-slate-600 space-y-0.5">

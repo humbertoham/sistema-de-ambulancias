@@ -50,7 +50,7 @@ export default function AmbulanciaPage() {
 
   const [emergencias, setEmergencias] = useState<AmbulanceEmergency[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
+const [ambulanciaDescripcion, setAmbulanciaDescripcion] = useState('');
   const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
   const [mapsLoaded, setMapsLoaded] = useState(false);
 
@@ -102,23 +102,24 @@ export default function AmbulanciaPage() {
           finalizada: normalizeTimestamp(statusRaw.finalizada),
         };
 
-        list.push({
-          id: docSnap.id,
-          ambulanciaId: data.ambulanciaId,
-          direccion: data.direccion,
-          lat: data.lat,
-          lng: data.lng,
-          estado: data.estado,
-          createdAt: createdAtMs,
-          priority: (data.priority ?? 'media') as Priority,
+       list.push({
+  id: docSnap.id,
+  ambulanciaId: data.ambulanciaId,
+  direccion: data.direccion,
+  lat: data.lat,
+  lng: data.lng,
+  estado: data.estado,
+  createdAt: createdAtMs,
+  priority: (data.priority ?? 'media') as Priority,
 
-          // Campos que definiste en Emergency (folio, tipoServicio, descripcion, paciente, statusTimestamps)
-          folio: data.folio,
-          tipoServicio: data.tipoServicio,
-          descripcion: data.descripcion,
-          paciente: data.paciente,
-          statusTimestamps,
-        });
+  folio: data.folio,
+  tipoServicio: data.tipoServicio,
+  descripcion: data.descripcion,
+  paciente: data.paciente,
+  statusTimestamps,
+
+  ambulanciaDescripcion: data.ambulanciaDescripcion, // 👈 NUEVO
+});
       });
 
       setEmergencias(list);
@@ -230,6 +231,18 @@ export default function AmbulanciaPage() {
     );
   }, [mapsLoaded, selectedEmergencia, currentPosition]);
 
+  //fdsfds
+  useEffect(() => {
+  if (selectedEmergencia) {
+    setAmbulanciaDescripcion(
+      selectedEmergencia.ambulanciaDescripcion ?? ''
+    );
+  } else {
+    setAmbulanciaDescripcion('');
+  }
+}, [selectedEmergencia]);
+
+
   // Guarda estado + hora numérica en statusTimestamps
   const cambiarEstado = async (estado: EmergencyStatus) => {
     if (!selectedEmergencia) return;
@@ -246,7 +259,13 @@ export default function AmbulanciaPage() {
     if (!selectedEmergencia) return;
     await cambiarEstado('finalizada');
   };
+const guardarDescripcionAmbulancia = async () => {
+  if (!selectedEmergencia) return;
 
+  await updateDoc(doc(db, 'emergencias', selectedEmergencia.id), {
+    ambulanciaDescripcion,
+  });
+};
   const abrirEnGoogleMaps = () => {
     if (!selectedEmergencia) return;
     const { lat, lng } = selectedEmergencia;
@@ -350,6 +369,24 @@ export default function AmbulanciaPage() {
                     )}
                   </div>
                 )}
+
+                <div className="mt-4">
+  <p className="text-sm font-medium mb-1">
+    Nota / descripción de la ambulancia
+  </p>
+  <textarea
+    className="border rounded px-3 py-2 w-full min-h-20 text-sm"
+    placeholder="Escribe hallazgos, maniobras realizadas, detalles del traslado, etc."
+    value={ambulanciaDescripcion}
+    onChange={e => setAmbulanciaDescripcion(e.target.value)}
+  />
+  <button
+    onClick={guardarDescripcionAmbulancia}
+    className="mt-2 px-3 py-1 rounded bg-blue-600 text-white text-xs font-semibold"
+  >
+    Guardar nota
+  </button>
+</div>
 
                 {selectedEmergencia.statusTimestamps && (
                   <div className="mt-3 text-xs text-slate-600 space-y-1">
